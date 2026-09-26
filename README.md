@@ -158,7 +158,8 @@ postgresql://user:password@host/dbname?sslmode=require
 ### 构建时报 `Expected "," in JSON`
 
 `package.json` 里改了 `scripts` 后，逗号位置不对。检查 `scripts` 段，确保 JSON 语法正确。
-##已知限制
+
+## 已知限制
 自定义 CSS 和自定义 HTML 页面功能，原版依赖本地文件系统（uploads/），在 Cloudflare Workers 上不可用。如需使用，需要把存储层改为数据库或 B2。
 ## 📚 技术栈
 
