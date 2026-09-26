@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: forumlify
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: forumlify
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - db_data:/var/lib/postgresql/data
+  app:
+    # 从 GHCR 拉取镜像（每次 push next 自动重建），不再本地构建
+    image: ghcr.io/forumlify/public:next
+    ports:
+      - "${FORUMLIFY_PORT:-3000}:3000"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://forumlify:123456@db:5432/forumlify
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  db_data:

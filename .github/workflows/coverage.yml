@@ -1,0 +1,131 @@
+name: Coverage
+
+on:
+  push:
+    branches: [next]
+  pull_request:
+    branches: [next]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-and-upload:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: forumlify
+          POSTGRES_PASSWORD: 123456
+          POSTGRES_DB: forumlify
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U forumlify -d forumlify"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://forumlify:123456@localhost:5433/forumlify
+      JWT_SECRET: ci-test-secret
+      ENABLE_CAPTCHA: 'false'
+      PORT: 3100
+      BASE_URL: http://127.0.0.1:3100
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize test database
+        env:
+          PGPASSWORD: '123456'
+        run: psql -h localhost -p 5433 -U forumlify -d forumlify -f schema.sql
+
+      - name: Build application
+        run: npm run build
+
+      - name: Upload bundle analysis to Codecov
+        env:
+          CODECOV_BUNDLE_ANALYSIS: 'true'
+        run: npx next build --webpack
+
+      - name: Run integration tests with coverage
+        run: |
+          node node_modules/next/dist/bin/next start -H 127.0.0.1 -p "$PORT" > server.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error "$BASE_URL/api/stats" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat server.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          node --test \
+            --test-concurrency=1 \
+            --test-reporter=spec \
+            --test-reporter=junit \
+            --test-reporter-destination=stdout \
+            --test-reporter-destination=test-results.xml \
+            test/*.test.js
+          cleanup
+          trap - EXIT
+
+          mkdir -p coverage
+          node --test \
+            --experimental-test-coverage \
+            --test-reporter=lcov \
+            --test-reporter-destination=coverage/lcov.info \
+            test/http-cache.test.js \
+            test/i18n-ui.test.js
+          test -s coverage/lcov.info
+          covered_lines=$(awk -F: '/^DA:/{split($2, data, ","); hits += data[2]} END {print hits + 0}' coverage/lcov.info)
+          test "$covered_lines" -gt 0
+          test -s test-results.xml
+
+      - name: Publish coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: error
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: coverage/lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload test results to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: test-results.xml
+          report_type: test_results
+          disable_search: true
+          fail_ci_if_error: true
